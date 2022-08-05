@@ -1,0 +1,139 @@
+---
+title: "Pathway Analysis for the Nasal Proteomics Paper"
+author: Ayass Bioscience LLC
+output: html_document
+---
+
+
+
+```{r}
+# install required libraries
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("NormalyzerDE")
+
+BiocManager::install("clusterProfiler")
+
+
+BiocManager::install("ROTS")
+BiocManager::install("org.Hs.eg.db")
+```
+
+## Packages for Normalization
+
+```{r pressure, echo=FALSE}
+library("Biobase")
+library("vsn")
+library("ggplot2")
+library("NormalyzerDE")
+library("ROTS")
+```
+
+```{r}
+outDir=getwd()
+
+
+# Provide design and data
+designFp <- "./data_plot//batch.tsv"
+dataFp <- "./data_plot/combined.tsv"
+# NormalyzerDE
+normalyzer(jobName="test1", designPath=designFp, dataPath=dataFp, outputDir=outDir)
+
+
+# use VSN normalized for its performance
+normMatrix <- "test1//VSN-normalized.txt"
+normalyzerDE("test1", comparisons=c("1-2"), designPath=designFp, dataPath=normMatrix, outputDir=outDir, condCol="group")
+
+#ROTS
+groups <- c(rep(1,76), rep(2,76))
+vsnData <- as.matrix(read.csv('test1/VSN-normalized.txt', sep='\t', header=T, row.names=1))
+resultsVsn <-  ROTS(data = vsnData, groups=groups)
+
+# volcano plot
+volcanoVsn <- data.frame(cbind(resultsVsn$logfc, resultsVsn$pvalue))
+colnames(volcanoVsn) <- c("logfc", "pvalue")
+
+# Assign not significant
+volcanoVsn$DE <- "NOT SIGNIFICANT"
+
+# Assign up/down regulation
+volcanoVsn$DE[volcanoVsn$logfc > 1.3 & volcanoVsn$pvalue < 0.05] <- "UP"
+volcanoVsn$DE[volcanoVsn$logfc < -1.3 & volcanoVsn$pvalue < 0.05] <- "DOWN"
+
+volcanovsnplot <- ggplot(data=volcanoVsn, aes(x=logfc, y=-log10(pvalue), col=DE))+geom_point(size=2) + theme_minimal() + geom_vline(xintercept=c(-1.3, 1.3), col="red")+geom_hline(yintercept=-log10(0.05), col="red")
+
+# save volcano plot as a figure
+ggsave(file="proteomics_volcanovsn.jpeg", plot=volcanovsnplot, dpi=600, width=10, height=8)
+
+```
+
+
+```{r}
+library(pheatmap)
+library(dplyr)
+selected_data <- subset(volcanoVsn, DE=='UP' | DE== 'DOWN')
+
+data_vsn <- read.csv('./data_plot/vsn_imputed.csv', header = TRUE, row.names = "idx")[, -c(1)]
+
+
+vsn_subset <- subset(data_vsn, rownames(data_vsn) %in% rownames(selected_data))
+
+protein_names.df  <- read.csv('./vsn_subset.csv')
+
+row.names(vsn_subset) <- protein_names.df$Protein_names
+heatmapplot <- vsn_subset %>%
+pheatmap(.,
+           fontsize = 7,
+           cutree_rows = 1, # Create breaks in heatmap
+           cutree_cols = 1)
+
+ggsave(file="prometics_heatmap.jpeg", plot=heatmapplot, dpi=600, width=12, height=8)
+```
+
+
+#GO and KEGG analysis
+```{r}
+library(clusterProfiler)
+library(DOSE)
+library(enrichplot)
+library(clusterProfiler)
+library(forcats)
+```
+
+
+```{r}
+enriched_genes <- bitr(row.names(selected_data), fromType = 'UNIPROT', toType = 'ENTREZID', OrgDb=org.Hs.eg.db)
+
+
+enrick_kegg = enrichKEGG(gene = enriched_genes$ENTREZID,
+                         pvalueCutoff = 0.05,
+                         organism     = 'hsa')
+
+go_bp = enrichGO(gene=enriched_genes$ENTREZID,
+              OrgDb = org.Hs.eg.db,
+              ont='BP',
+              pvalueCutoff  = 0.05)
+# kegg plot
+keggplot <- ggplot(enrick_kegg[1:8, ], aes(x = -log2(p.adjust), y = fct_reorder(Description, -log2(p.adjust)))) + 
+               geom_point(aes(size=GeneRatio, color = Count)) +
+               theme_bw(base_size = 14) +
+        scale_colour_gradient(low="red") +
+        ylab(NULL) +
+        ggtitle("KEGG pathway")+theme(plot.title = element_text(hjust = 0.5))
+
+# go plot
+goplot_bp<-ggplot(go_bp[1:13, ], aes(x = -log2(p.adjust), y = fct_reorder(Description, -log2(p.adjust)))) + 
+               geom_point(aes(size=GeneRatio, color = Count)) +
+               theme_bw(base_size = 14) +
+        scale_colour_gradient(low="red") +
+        ylab(NULL) +
+        ggtitle("GO Enrichment (BP)")+theme(plot.title = element_text(hjust = 0.5))
+
+# save plots
+ggsave(file="kegg_pathways.jpeg", plot=kegg_plot, dpi=600, width=10, height=8)
+ggsave(file="go_enrichment_BP.jpeg", plot=goplot_bp, dpi=600, width=10, height=8)
+
+```
+
